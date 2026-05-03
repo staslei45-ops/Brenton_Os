@@ -1,3 +1,4 @@
+#include "Global.h"
 #include <Arduino.h>
 #include "Display.h" 
 #include <XPT2046_Touchscreen.h>
@@ -29,7 +30,7 @@ static inline void drawExitButton() {
     canvas->drawRect(110, 205, 100, 30, 0xFFFF);
     canvas->setCursor(140, 212);
     canvas->setTextColor(0xFFFF);
-    canvas->setTextSize(2);
+    canvas->setTextSize(1);
     canvas->print("EXIT");
 }
 

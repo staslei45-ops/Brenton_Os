@@ -1,12 +1,14 @@
+#include "Global.h"
 #include "Snake.h"
-#include "Display.h" 
+#include "Display.h"
 #include <Preferences.h>
 #include <XPT2046_Touchscreen.h>
 
-extern void showMenu(bool fullRedraw); // Используем showMenu для единства системы
+extern void showMenu(bool fullRedraw);
 extern void getPoint(int &x, int &y);
 extern XPT2046_Touchscreen ts;
 
+// Старые добрые цвета
 #define COL_BG      0x1084
 #define COL_GRID    0x18C5
 #define COL_SNAKE   0x07E0
@@ -17,7 +19,7 @@ extern XPT2046_Touchscreen ts;
 int sn_X[100], sn_Y[100], sn_L, sn_D, f_X, f_Y;
 unsigned long sn_T;
 int sn_score = 0, sn_highScore = 0, last_sn_D;
-bool isGameOverSnake = false; // Флаг состояния
+bool isGameOverSnake = false;
 
 Preferences prefSnake;
 
@@ -31,14 +33,14 @@ void drawSnakeHead(int x, int y, int dir) {
 
 void drawFood(int x, int y) {
     auto* canvas = bDisp.getCanvas();
-    canvas->fillCircle(x + 5, y + 6, 4, COL_APPLE);
+    canvas->fillCircle(x + 5, y + 6, 4, COL_APPLE); // Яблоко
     canvas->fillRect(x + 5, y + 1, 2, 3, 0x5140); // Черенок
     canvas->drawPixel(x + 6, y, 0x07E0);          // Листик
 }
 
 void drawSnakeExit() {
     auto* canvas = bDisp.getCanvas();
-    canvas->fillRect(285, 5, 30, 25, 0xB000);
+    canvas->fillRect(285, 5, 30, 25, 0xB000); // Кнопка выхода
     canvas->drawRect(285, 5, 30, 25, 0xFFFF);
     canvas->setCursor(295, 10);
     canvas->setTextColor(0xFFFF);
@@ -76,24 +78,20 @@ void initSnake() {
 void tickSnake() {
     auto* canvas = bDisp.getCanvas();
 
-    // 1. ПРОВЕРКА ТАЧА (В начале, как в Кубе)
     if (ts.touched()) {
         int tx, ty;
         getPoint(tx, ty);
 
-        // Мгновенный выход
         if (tx > 270 && ty < 40) {
-            showMenu(true);
+            showMenu(true); // Выход в систему
             return;
         }
 
-        // Рестарт если проиграли
         if (isGameOverSnake) {
             initSnake();
             return;
         }
 
-        // Управление направлением
         int dx = tx - sn_X[0], dy = ty - sn_Y[0];
         if (abs(dx) > abs(dy)) {
             if (dx > 10 && last_sn_D != 3) sn_D = 1;
@@ -104,24 +102,22 @@ void tickSnake() {
         }
     }
 
-    // Если игра окончена — рисуем экран смерти и ждём тача (без задержек!)
     if (isGameOverSnake) {
         canvas->fillScreen(0x0000);
         canvas->setTextColor(0xF800);
         canvas->setTextSize(3);
         canvas->setCursor(80, 90);
         canvas->print("GAME OVER");
-        
+
         canvas->setTextColor(0xFFFF);
         canvas->setTextSize(2);
         canvas->setCursor(90, 140);
         canvas->print("SCORE: "); canvas->print(sn_score);
-        
+
         drawSnakeExit();
-        return; 
+        return;
     }
 
-    // 2. ЛОГИКА ДВИЖЕНИЯ
     if (millis() - sn_T > 110) {
         sn_T = millis();
         last_sn_D = sn_D;
@@ -136,7 +132,6 @@ void tickSnake() {
         else if(sn_D == 2) sn_Y[0] += 10;
         else if(sn_D == 3) sn_X[0] -= 10;
 
-        // Столкновения
         if(sn_X[0] < 0 || sn_X[0] >= 320 || sn_Y[0] < 35 || sn_Y[0] >= 240) {
             isGameOverSnake = true;
         }
@@ -154,7 +149,6 @@ void tickSnake() {
             return;
         }
 
-        // Поедание яблока
         if(abs(sn_X[0] - f_X) < 8 && abs(sn_Y[0] - f_Y) < 8) {
             if (sn_L < 100) sn_L++;
             sn_score += 10;
@@ -162,7 +156,6 @@ void tickSnake() {
         }
     }
 
-    // 3. ОТРИСОВКА КАДРА
     canvas->fillScreen(COL_BG);
 
     // Сетка
@@ -180,9 +173,8 @@ void tickSnake() {
     canvas->print("XP: "); canvas->print(sn_score);
     canvas->print(" | BEST: "); canvas->print(max(sn_score, sn_highScore));
 
-    drawFood(f_X, f_Y); // Яблоко
+    drawFood(f_X, f_Y);
 
-    // Змейка
     for(int i = 1; i < sn_L; i++) {
         canvas->fillRoundRect(sn_X[i], sn_Y[i], 9, 9, 2, COL_BODY);
     }

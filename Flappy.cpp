@@ -1,3 +1,4 @@
+#include "Global.h"
 #include "Flappy.h"
 #include "Display.h" 
 #include <Preferences.h>

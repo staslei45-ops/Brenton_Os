@@ -1,3 +1,4 @@
+#include "Global.h"
 #include "Notepad.h"
 #include "Display.h" 
 #include <Preferences.h>

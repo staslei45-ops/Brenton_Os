@@ -1,3 +1,4 @@
+#include "Global.h"
 #include "About.h"
 #include "Display.h" 
 #include <XPT2046_Touchscreen.h>

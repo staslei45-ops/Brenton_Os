@@ -1,187 +1,430 @@
+// ================================================================
+//  CoolSpotGame — переписан под Engine2D
+//  Было: физика, коллизии, рендер вручную в одной куче.
+//  Стало: Entity/Scene/Renderer/Input/FrameTimer из Engine2D.
+//
+//  Оптимизации против лагов:
+//  - sin() на монетках убран, заменён простым XOR-миганием
+//  - Тайлмап рисуется только видимая область (как было)
+//  - FrameTimer(30) — не тратим кадры впустую
+//  - Физика и коллизии игрока через Transform.vel
+//  - Враги — Entity группы GRP_ENEMY в Scene
+// ================================================================
+
 #include "CoolSpotGame.h"
-#include <Display.h>
-#include <XPT2046_Touchscreen.h>
+#include "Display.h"
 #include "Global.h"
+#include <XPT2046_Touchscreen.h>
 
 extern BrentonDisplay bDisp;
 extern XPT2046_Touchscreen ts;
 extern void getPoint(int &x, int &y);
+extern unsigned long lastTouch;
 
-// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ОТРИСОВКИ ---
+// ----------------------------------------------------------------
+//  Тайловая карта
+// ----------------------------------------------------------------
+static const uint8_t defaultMap[MAP_H][MAP_W] = {
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
+    {1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,0,2,2,2,0,0,0,1,1,1,0,0,0,0,0,0,0,2,2,2,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,2,0,1},
+    {1,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,1,1,1},
+    {1,0,0,0,0,0,0,0,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,0,0,0,1},
+    {1,0,0,0,0,0,1,1,1,1,1,1,1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1},
+    {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,2,0,0,2,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
+    {1,1,1,0,1,1,0,0,0,0,0,0,0,1,1,1,1,1,1,0,1,1,1,1,1,1,0,0,0,0,1,1,0,0,0,0,0,0,0,1},
+    {1,0,0,0,0,0,0,1,1,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,0,0,0,0,2,0,1},
+    {1,0,0,0,0,0,1,1,1,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,0,0,1,1,1,1},
+    {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
+};
 
-void CoolSpotGame::drawSpot(int sx, int sy, bool flipped) {
-    auto* canvas = bDisp.getCanvas();
-
-    // Тело с контуром для объема
-    canvas->fillCircle(sx, sy, 9, 0xF800); // Красный[cite: 4]
-    canvas->drawCircle(sx, sy, 9, 0x0000); // Черный контур
-
-    // Белые перчатки (фишка персонажа)
-    canvas->fillCircle(sx + (flipped ? 7 : -7), sy + 3, 3, 0xFFFF);
-
-    // Очки "Авиаторы"
-    int ox = flipped ? sx - 8 : sx + 0;
-    canvas->fillRoundRect(ox, sy - 4, 8, 5, 2, 0x0000); // Оправа
-    canvas->drawPixel(ox + 2, sy - 3, 0xFFFF);         // Блик слева
-    canvas->drawPixel(ox + 6, sy - 3, 0xFFFF);         // Блик справа
-
-    // Обувь (небольшие штрихи снизу)
-    canvas->fillRect(sx - 4, sy + 7, 8, 3, 0xFFFF);
-}
-
-void CoolSpotGame::drawDetailedCoin(int cx, int cy) {
-    auto* canvas = bDisp.getCanvas();
-
-    // Динамический блеск в зависимости от времени[cite: 4]
-    int shine = abs(sin(millis() / 150.0) * 4);
-
-    canvas->fillCircle(cx, cy, 6, 0x9480); // Темное золото (граница)
-    canvas->fillCircle(cx, cy, 5, 0xFD20); // Золото[cite: 4]
-    canvas->fillCircle(cx, cy, 3, 0xFFE0); // Светлый центр
-
-    // Бегающий блик
-    canvas->drawFastVLine(cx - 2 + shine, cy - 2, 4, 0xFFFF);
-}
-
-// --- ОСНОВНАЯ ЛОГИКА (Остается прежней, меняем render) ---[cite: 4]
-
+// ----------------------------------------------------------------
+//  Инициализация
+// ----------------------------------------------------------------
 void CoolSpotGame::init() {
-    isRunning = true;
-    status = GS_MENU;
-    score = 0; lives = 3; enemyCount = 3;
-    uint8_t tempMap[12][40] = {
-        {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1},
-        {1,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-        {1,0,2,2,2,0,0,0,1,1,1,0,0,0,0,0,0,0,2,2,2,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0,0,2,0,1},
-        {1,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,1,1,1,0,0,0,0,0,0,0,1,1,1},
-        {1,0,0,0,0,0,0,0,0,0,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,2,0,0,0,1},
-        {1,0,0,0,0,0,1,1,1,1,1,1,1,0,0,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1},
-        {1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,0,0,0,2,2,2,2,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-        {1,2,0,0,2,0,0,0,0,0,0,0,0,0,1,1,1,1,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1},
-        {1,1,1,0,1,1,0,0,0,0,0,0,0,1,1,1,1,1,1,0,1,1,1,1,1,1,0,0,0,0,1,1,0,0,0,0,0,0,0,1},
-        {1,0,0,0,0,0,0,1,1,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,0,0,0,0,2,0,1},
-        {1,0,0,0,0,0,1,1,1,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,0,0,1,1,1,1,1,0,0,1,1,1,1},
-        {1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1}
-    };
-    memcpy(levelMap, tempMap, sizeof(levelMap));
-    enemies[0] = {200, 190, 1, 150, 300};
-    enemies[1] = {500, 170, -1, 400, 600};
-    enemies[2] = {750, 190, 1, 700, 850};
-    resetPlayer();
+    isRunning   = true;
+    status      = GS_MENU;
+    score       = 0;
+    lives       = 3;
+    enemyCount  = 3;
+    camX        = 0;
+    invuln      = 0;
+
+    // Копируем карту (она изменяется при сборе монет)
+    memcpy(levelMap, defaultMap, sizeof(levelMap));
+
+    // Настраиваем движок
+    rend.setCanvas(bDisp.getCanvas());
+    ftimer = FrameTimer(30);
+    scene.setRenderer(&rend);
+    scene.killAll();
+
+    playerId = ENTITY_NONE;
+    spawnEnemies();
 }
 
 void CoolSpotGame::resetPlayer() {
-    x = 40; y = 100; velX = 0; velY = 0; camX = 0; isGrounded = false; flip = false;
+    // Убиваем старого игрока если есть
+    if (playerId != ENTITY_NONE) scene.kill(playerId);
+
+    Entity* p    = scene.spawn(GRP_PLAYER);
+    p->transform = Transform(40, 100, 9.f);
+    p->transform.vel = Vec2(0, 0);
+    p->sprite    = Sprite::circle(0xF800, 0x0000, true);
+    p->userData  = (void*)0; // 0 = не перевёрнут
+    playerId     = p->id;
+    invuln       = 0;
 }
 
-bool CoolSpotGame::checkCollision(float nextX, float nextY) {
-    int tx = (int)nextX / 20; int ty = (int)nextY / 20;
-    if (tx < 0 || tx >= mapW || ty < 0 || ty >= mapH) return true;
+void CoolSpotGame::spawnEnemies() {
+    // Убиваем старых врагов
+    scene.killAll(GRP_ENEMY);
+
+    struct { float x, y, minX, maxX; } edata[] = {
+        {200, 190, 150, 300},
+        {500, 170, 400, 600},
+        {750, 190, 700, 850},
+    };
+    for (int i = 0; i < enemyCount; i++) {
+        Entity* e    = scene.spawn(GRP_ENEMY);
+        e->transform = Transform(edata[i].x, edata[i].y, 8.f);
+        e->transform.vel = Vec2(1.8f, 0);
+        // Храним minX/maxX в userData как упакованные int16
+        // (простой трюк без доп. аллокаций)
+        uint32_t packed = ((uint32_t)(int16_t)edata[i].minX << 16) | (uint16_t)(int16_t)edata[i].maxX;
+        e->userData  = (void*)(uintptr_t)packed;
+        e->sprite    = Sprite::circle(0xF800, 0x0000, true);
+    }
+}
+
+// ----------------------------------------------------------------
+//  Тайловые коллизии
+// ----------------------------------------------------------------
+bool CoolSpotGame::tileAt(float wx, float wy) {
+    int tx = (int)wx / TILE_SIZE;
+    int ty = (int)wy / TILE_SIZE;
+    if (tx < 0 || tx >= MAP_W || ty < 0 || ty >= MAP_H) return true;
     return levelMap[ty][tx] == TILE_WALL;
 }
 
-void CoolSpotGame::update() {
-    if (ts.touched()) {
-        int tx, ty; getPoint(tx, ty);
-        if (tx > 280 && ty < 45) { isRunning = false; return; }
-        if (status == GS_MENU || status == GS_DEAD) {
-            if (tx > 80 && tx < 240 && ty > 150) { init(); status = GS_PLAYING; delay(200); }
-            return;
+void CoolSpotGame::resolvePlayerTiles(Entity* p) {
+    Vec2& pos = p->transform.pos;
+    Vec2& vel = p->transform.vel;
+    float r   = p->transform.radius;
+    bool grounded = false;
+
+    // Горизонталь
+    float nx = pos.x + vel.x;
+    if (!tileAt(nx + (vel.x > 0 ? r : -r), pos.y))
+        pos.x = nx;
+    else
+        vel.x = 0;
+
+    // Вертикаль
+    pos.y += vel.y;
+    if (vel.y > 0) {
+        if (tileAt(pos.x, pos.y + r)) {
+            pos.y = floorf((pos.y + r) / TILE_SIZE) * TILE_SIZE - r;
+            vel.y = 0;
+            grounded = true;
         }
-        if (status == GS_PLAYING) {
-            if (tx > 140 && tx < 180 && ty < 45) { status = GS_PAUSED; delay(200); return; }
-            if (tx > 160) { if (isGrounded) { velY = -8.2; isGrounded = false; } }
-            else { if (tx < 80) { velX -= 0.9; flip = true; } else { velX += 0.9; flip = false; } }
-        }
-        else if (status == GS_PAUSED) { if (ty > 45) { status = GS_PLAYING; delay(200); } return; }
-    }
-    if (status != GS_PLAYING) return;
-
-    velY += 0.45; velX *= 0.85;
-    float nX = x + velX;
-    if (!checkCollision(nX + (velX > 0 ? 8 : -8), y)) x = nX; else velX = 0;
-    y += velY;
-    if (velY > 0) {
-        if (checkCollision(x, y + 10)) { y = (int(y + 10) / 20) * 20 - 10; velY = 0; isGrounded = true; }
-        else isGrounded = false;
-    } else { if (checkCollision(x, y - 10)) velY = 0; }
-
-    int tx = x / 20; int ty = y / 20;
-    if (levelMap[ty][tx] == TILE_COIN) { levelMap[ty][tx] = TILE_EMPTY; score += 10; }
-
-    for (int i = 0; i < enemyCount; i++) {
-        enemies[i].x += enemies[i].dir * 1.8;
-        if (enemies[i].x < enemies[i].minX || enemies[i].x > enemies[i].maxX) enemies[i].dir *= -1;
-        if (abs(x - enemies[i].x) < 15 && abs(y - enemies[i].y) < 15) {
-            lives--; if (lives <= 0) status = GS_DEAD; else resetPlayer();
+    } else if (vel.y < 0) {
+        if (tileAt(pos.x, pos.y - r)) {
+            vel.y = 0;
         }
     }
 
-    float targetCam = x - 160; camX = camX * 0.9 + targetCam * 0.1;
-    if (camX < 0) camX = 0;
-    if (camX > (mapW * 20) - 320) camX = (mapW * 20) - 320;
+    // Сохраняем grounded в userData: бит 31
+    uintptr_t ud = (uintptr_t)p->userData;
+    if (grounded) ud |= 0x80000000;
+    else          ud &= ~0x80000000;
+    p->userData = (void*)ud;
 }
 
-void CoolSpotGame::render() {
-    auto* canvas = bDisp.getCanvas();
+// ----------------------------------------------------------------
+//  Логика (update)
+// ----------------------------------------------------------------
+void CoolSpotGame::update() {
+    // Читаем тач ОДИН РАЗ — XPT2046 не любит двойное чтение за один цикл
+    bool tch = ts.touched();
+    int rx = 160, ry = 120;
+    if (tch) getPoint(rx, ry);
+    input.update(tch, rx, ry);
 
-    if (status == GS_MENU) {
-        canvas->fillScreen(0x2104);
-        canvas->setTextSize(6); canvas->setTextColor(0xFFFF);
-        canvas->setCursor(80, 40); canvas->print("7");
-        float pulse = sin(millis() / 300.0) * 4;
-        canvas->fillCircle(150, 65, 22 + pulse, 0xF800);
-        canvas->fillCircle(145, 60, 4, 0xFFFF);
-        canvas->setCursor(185, 40); canvas->print("UP");
-        canvas->setTextSize(2); canvas->setCursor(75, 105);
-        canvas->setTextColor(0x07E0); canvas->print("ADVENTURE");
-        canvas->fillRoundRect(80, 155, 160, 45, 10, 0x03E0);
-        canvas->drawRoundRect(80, 155, 160, 45, 10, 0xFFFF);
-        canvas->setTextColor(0xFFFF); canvas->setCursor(130, 170); canvas->print("PLAY");
+    // Кнопка X — всегда работает на любом экране
+    if (input.justPressed && rx > 275 && ry < 35) {
+        isRunning = false;
         return;
     }
 
-    canvas->fillScreen(0x5AEB); // Небо[cite: 4]
+    if (status == GS_MENU || status == GS_DEAD) {
+        if (input.justPressed && rx > 80 && rx < 240 && ry > 150) {
+            score = 0; lives = 3;
+            memcpy(levelMap, defaultMap, sizeof(levelMap));
+            scene.killAll();
+            spawnEnemies();
+            resetPlayer();
+            status = GS_PLAYING;
+        }
+        return;
+    }
 
-    // Отрисовка уровня
-    for (int ty = 0; ty < mapH; ty++) {
-        for (int tx = (camX / 20); tx < (camX + 340) / 20; tx++) {
-            if (tx >= mapW) continue;
-            int dx = tx * 20 - (int)camX; int dy = ty * 20;
-            if (levelMap[ty][tx] == TILE_WALL) {
-                canvas->fillRect(dx, dy, 20, 20, 0x8400);
-                canvas->drawRect(dx, dy, 20, 20, 0x4200);
-            }
-            else if (levelMap[ty][tx] == TILE_COIN) {
-                drawDetailedCoin(dx + 10, dy + 10); // Красивая монетка[cite: 4]
+    if (status == GS_PAUSED) {
+        if (input.justPressed && ry > 45) { status = GS_PLAYING; }
+        return;
+    }
+
+    if (!ftimer.ready()) return;
+
+    Entity* player = scene.get(playerId);
+    if (!player) return;
+
+    bool grounded = (uintptr_t)player->userData & 0x80000000;
+
+    if (input.touched && input.pos.y < 45 && input.pos.x > 120 && input.pos.x < 200) {
+        status = GS_PAUSED;
+        
+        return;
+    }
+
+    if (input.touched) {
+        float px = input.pos.x;
+        float py = input.pos.y;
+        if (py > 45) {
+            if (px > 160) {
+                // Прыжок — правая половина
+                if (grounded) player->transform.vel.y = -8.2f;
+            } else if (px < 80) {
+                // Влево
+                player->transform.vel.x -= 0.9f;
+                player->userData = (void*)((uintptr_t)player->userData | 1); // flip
+            } else {
+                // Вправо
+                player->transform.vel.x += 0.9f;
+                player->userData = (void*)((uintptr_t)player->userData & ~1); // no flip
             }
         }
     }
 
-    // Враги (можно будет тоже заменить на "Злых Спотов")[cite: 4]
-    for (int i = 0; i < enemyCount; i++) {
-        canvas->fillTriangle(enemies[i].x - camX, enemies[i].y - 8, enemies[i].x - camX - 8, enemies[i].y + 8, enemies[i].x - camX + 8, enemies[i].y + 8, 0xF800);
+    // ---- Физика игрока ----
+    player->transform.vel.y += 0.45f; // гравитация
+    player->transform.vel.x *= 0.85f; // трение
+
+    resolvePlayerTiles(player);
+
+    // ---- Сбор монет ----
+    Vec2 pp = player->transform.pos;
+    int mapTx = (int)pp.x / TILE_SIZE;
+    int mapTy = (int)pp.y / TILE_SIZE;
+    if (mapTx >= 0 && mapTx < MAP_W && mapTy >= 0 && mapTy < MAP_H) {
+        if (levelMap[mapTy][mapTx] == TILE_COIN) {
+            levelMap[mapTy][mapTx] = TILE_EMPTY;
+            score += 10;
+        }
     }
 
-    // РИСУЕМ КРУТОГО СПОТА[cite: 4]
-    drawSpot(x - camX, y, flip);
+    // ---- Враги ----
+    for (int i = 0; i < scene.count; i++) {
+        Entity& e = scene.entities[i];
+        if (!e.alive || e.group != GRP_ENEMY) continue;
 
-    if (status == GS_PAUSED) {
-        canvas->fillRect(80, 80, 160, 60, 0x2104);
-        canvas->setCursor(110, 100); canvas->setTextSize(2); canvas->print("PAUSE");
+        uint32_t packed = (uint32_t)(uintptr_t)e.userData;
+        int16_t minX = (int16_t)(packed >> 16);
+        int16_t maxX = (int16_t)(packed & 0xFFFF);
+
+        e.transform.pos.x += e.transform.vel.x;
+        if (e.transform.pos.x < minX || e.transform.pos.x > maxX)
+            e.transform.vel.x *= -1;
+
+        // Столкновение с игроком (с неуязвимостью)
+        if (invuln == 0 && Collider::circle_circle(*player, e)) {
+            lives--;
+            invuln = 40;
+            if (lives <= 0) {
+                status = GS_DEAD;
+                return;
+            }
+            resetPlayer();
+            player = scene.get(playerId);
+            if (!player) return;
+        }
     }
-    else if (status == GS_DEAD) {
-        canvas->fillScreen(0x0000);
-        canvas->setCursor(80, 110); canvas->setTextSize(3); canvas->print("GAME OVER");
+    if (invuln > 0) invuln--;
+
+    // ---- Камера (плавная) ----
+    float targetCam = player->transform.pos.x - 160;
+    camX = camX * 0.88f + targetCam * 0.12f;
+    if (camX < 0) camX = 0;
+    float maxCamX = (MAP_W * TILE_SIZE) - 320;
+    if (camX > maxCamX) camX = maxCamX;
+}
+
+// ----------------------------------------------------------------
+//  Спрайты
+// ----------------------------------------------------------------
+void CoolSpotGame::drawSpot(int sx, int sy, bool flipped) {
+    auto* c = bDisp.getCanvas();
+    c->fillCircle(sx, sy, 9, 0xF800);
+    c->drawCircle(sx, sy, 9, 0x0000);
+    c->fillCircle(sx + (flipped ? 7 : -7), sy + 3, 3, 0xFFFF); // перчатка
+    int ox = flipped ? sx - 8 : sx;
+    c->fillRoundRect(ox, sy - 4, 8, 5, 2, 0x0000); // очки
+    c->drawPixel(ox + 2, sy - 3, 0xFFFF);
+    c->drawPixel(ox + 6, sy - 3, 0xFFFF);
+    c->fillRect(sx - 4, sy + 7, 8, 3, 0xFFFF); // обувь
+
+    // Мигание при неуязвимости
+    if (invuln > 0 && (invuln / 4) % 2 == 0) {
+        c->drawCircle(sx, sy, 11, 0xFFFF);
+    }
+}
+
+void CoolSpotGame::drawEnemy(int sx, int sy) {
+    auto* c = bDisp.getCanvas();
+    // Злой треугольный Спот-враг
+    c->fillTriangle(sx, sy - 10, sx - 9, sy + 8, sx + 9, sy + 8, 0xF800);
+    c->fillCircle(sx - 3, sy, 2, 0x0000); // глаз
+    c->fillCircle(sx + 3, sy, 2, 0x0000);
+}
+
+// ----------------------------------------------------------------
+//  Тайлмап
+// ----------------------------------------------------------------
+void CoolSpotGame::drawTilemap() {
+    auto* c = bDisp.getCanvas();
+    int startTx = (int)camX / TILE_SIZE;
+    int endTx   = startTx + (320 / TILE_SIZE) + 2;
+    if (endTx > MAP_W) endTx = MAP_W;
+
+    // Заменяем sin() на простое мигание по millis()
+    bool coinBlink = (millis() / 300) % 2;
+
+    for (int ty = 0; ty < MAP_H; ty++) {
+        for (int tx = startTx; tx < endTx; tx++) {
+            int dx = tx * TILE_SIZE - (int)camX;
+            int dy = ty * TILE_SIZE;
+
+            if (levelMap[ty][tx] == TILE_WALL) {
+                c->fillRect(dx, dy, TILE_SIZE, TILE_SIZE, 0x8400);
+                c->drawRect(dx, dy, TILE_SIZE, TILE_SIZE, 0x4200);
+            } else if (levelMap[ty][tx] == TILE_COIN) {
+                int cx = dx + 10, cy = dy + 10;
+                c->fillCircle(cx, cy, 6, 0x9480);
+                c->fillCircle(cx, cy, 5, 0xFD20);
+                c->fillCircle(cx, cy, 3, 0xFFE0);
+                if (coinBlink) c->fillRect(cx - 1, cy - 3, 2, 5, 0xFFFF);
+            }
+        }
+    }
+}
+
+// ----------------------------------------------------------------
+//  Рендер HUD / экраны
+// ----------------------------------------------------------------
+void CoolSpotGame::drawHUD() {
+    auto* c = bDisp.getCanvas();
+    c->fillRect(0, 0, 320, 22, 0x10A2);
+    c->setTextColor(0xFFFF);
+    c->setTextSize(1);
+    c->setCursor(6, 7);
+    c->printf("XP: %d   LIVES: %d", score, lives);
+    // Кнопка PAUSE
+    c->fillRect(140, 3, 40, 16, 0x4208);
+    c->setCursor(148, 7);
+    c->print("MENU");
+    // Кнопка X
+    c->fillRect(285, 3, 30, 16, 0xB000);
+    c->setCursor(296, 7);
+    c->print("X");
+}
+
+void CoolSpotGame::drawMenu() {
+    auto* c = bDisp.getCanvas();
+    c->fillScreen(0x2104);
+    c->setTextSize(6); c->setTextColor(0xFFFF);
+    c->setCursor(80, 40); c->print("7");
+    c->fillCircle(150, 65, 22, 0xF800);
+    c->fillCircle(145, 60, 4, 0xFFFF);
+    c->setCursor(185, 40); c->print("UP");
+    c->setTextSize(2); c->setTextColor(0x07E0);
+    c->setCursor(75, 105); c->print("ADVENTURE");
+    c->fillRoundRect(80, 155, 160, 45, 10, 0x03E0);
+    c->drawRoundRect(80, 155, 160, 45, 10, 0xFFFF);
+    c->setTextColor(0xFFFF); c->setTextSize(2);
+    c->setCursor(125, 170); c->print("PLAY");
+
+    // Кнопка выхода
+    c->fillRect(285, 3, 30, 16, 0xB000);
+    c->setTextSize(1);
+    c->setCursor(296, 7); c->print("X");
+}
+
+void CoolSpotGame::drawPause() {
+    auto* c = bDisp.getCanvas();
+    c->fillRect(70, 75, 180, 70, 0x2104);
+    c->drawRect(70, 75, 180, 70, 0xFFFF);
+    c->setTextColor(0xFFFF); c->setTextSize(2);
+    c->setCursor(115, 100); c->print("PAUSE");
+    c->setTextSize(1);
+    c->setCursor(90, 128); c->print("Tap screen to continue");
+}
+
+void CoolSpotGame::drawGameOver() {
+    auto* c = bDisp.getCanvas();
+    c->fillScreen(0x0000);
+    c->setTextColor(0xF800); c->setTextSize(3);
+    c->setCursor(30, 60); c->print("GAME OVER");
+    c->setTextColor(0xFFFF); c->setTextSize(2);
+    c->setCursor(90, 110); c->printf("XP: %d", score);
+    c->fillRoundRect(80, 155, 160, 45, 10, 0x03E0);
+    c->drawRoundRect(80, 155, 160, 45, 10, 0xFFFF);
+    c->setTextColor(0xFFFF); c->setCursor(115, 170); c->print("RETRY");
+    c->fillRect(285, 3, 30, 16, 0xB000);
+    c->setTextSize(1); c->setCursor(296, 7); c->print("X");
+}
+
+// ----------------------------------------------------------------
+//  Главный render()
+// ----------------------------------------------------------------
+void CoolSpotGame::render() {
+    auto* c = bDisp.getCanvas();
+
+    if (status == GS_MENU) {
+        drawMenu();
+        bDisp.update();
+        return;
     }
 
-    // UI элементы[cite: 4]
-    canvas->drawRoundRect(10, 185, 50, 45, 5, 0xFFFF);
-    canvas->drawRoundRect(70, 185, 50, 45, 5, 0xFFFF);
-    canvas->drawRoundRect(210, 185, 100, 45, 10, 0xFFFF);
-    canvas->fillRect(285, 5, 30, 20, 0xF800);
-    canvas->setCursor(295, 10); canvas->setTextSize(1); canvas->setTextColor(0xFFFF); canvas->print("X");
+    if (status == GS_DEAD) {
+        drawGameOver();
+        bDisp.update();
+        return;
+    }
 
-    // Иконки вместо текста (опционально)[cite: 4]
-    canvas->setCursor(10, 5); canvas->printf("XP: %d  LIVES: %d", score, lives);
+    // FPS ограничивается только в update()
+
+    c->fillScreen(0x5AEB); // Небо
+
+    drawTilemap();
+
+    // Враги
+    for (int i = 0; i < scene.count; i++) {
+        Entity& e = scene.entities[i];
+        if (!e.alive || e.group != GRP_ENEMY) continue;
+        drawEnemy((int)(e.transform.pos.x - camX), (int)e.transform.pos.y);
+    }
+
+    // Игрок
+    Entity* player = scene.get(playerId);
+    if (player) {
+        bool flipped = (uintptr_t)player->userData & 1;
+        drawSpot((int)(player->transform.pos.x - camX), (int)player->transform.pos.y, flipped);
+    }
+
+    drawHUD();
+
+    if (status == GS_PAUSED) drawPause();
+
+    bDisp.update();
 }

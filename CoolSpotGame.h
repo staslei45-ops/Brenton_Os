@@ -2,6 +2,7 @@
 #define COOLSPOTGAME_H
 
 #include <Arduino.h>
+#include "Engine2D.h"
 
 #define TILE_EMPTY 0
 #define TILE_WALL  1
@@ -9,11 +10,14 @@
 
 enum GameStatus { GS_MENU, GS_PLAYING, GS_PAUSED, GS_DEAD };
 
-struct EnemySpot {
-    float x, y;
-    int dir;
-    int minX, maxX;
-};
+// Группы Entity в сцене
+#define GRP_PLAYER 0
+#define GRP_ENEMY  1
+
+// Размер тайла и карты
+#define TILE_SIZE  20
+#define MAP_W      40
+#define MAP_H      12
 
 class CoolSpotGame {
 public:
@@ -23,25 +27,41 @@ public:
     bool isRunning = true;
 
 private:
-    float x, y, velX, velY, camX;
-    bool isGrounded, flip;
-    int score, lives;
-    GameStatus status;
+    // ---- Engine2D ----
+    Scene       scene;
+    Renderer    rend;
+    Input       input;
+    FrameTimer  ftimer;
+    Camera      cam;
 
-    static const int maxEnemies = 5;
-    EnemySpot enemies[maxEnemies];
-    int enemyCount;
+    EntityID    playerId;
 
+    // ---- Тайловая карта ----
+    uint8_t     levelMap[MAP_H][MAP_W];
+
+    // ---- Состояние ----
+    GameStatus  status;
+    int         score;
+    int         lives;
+    int         enemyCount;
+    int         invuln;     // кадры неуязвимости после удара
+
+    // ---- Камера ----
+    float       camX;       // горизонтальный скролл
+
+    // ---- Вспомогательные ----
     void resetPlayer();
-    bool checkCollision(float nextX, float nextY);
+    bool tileAt(float wx, float wy);  // есть ли стена в мировых координатах
+    void resolvePlayerTiles(Entity* p);
+    void spawnEnemies();
 
-    // Новые функции для "красивой" отрисовки
+    void drawTilemap();
     void drawSpot(int sx, int sy, bool flipped);
-    void drawDetailedCoin(int cx, int cy);
-
-    static const int mapW = 40;
-    static const int mapH = 12;
-    uint8_t levelMap[mapH][mapW];
+    void drawEnemy(int sx, int sy);
+    void drawHUD();
+    void drawMenu();
+    void drawPause();
+    void drawGameOver();
 };
 
 #endif
